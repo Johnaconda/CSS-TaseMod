@@ -1,0 +1,43 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="TasePlugin.cs" />
+    <Compile Include="Tase.Jail.cs" />
+    <Compile Include="Tase.PhysGun.cs" />
+    <Compile Include="Tase.Appeal.cs" />
+	<Compile Include="TasePlugin.cs" />
+    <Compile Include="TitleClass.cs" />
+    <Compile Include="TitlesManager.cs" />
+    <Compile Include="RolesManager.cs" />
+    <Compile Include="PlayerVarCache.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="CounterStrikeSharp.API">
+      <HintPath>C:\cs2-ds\game\csgo\addons\counterstrikesharp\api\CounterStrikeSharp.API.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <Target Name="CopyToServer" AfterTargets="Build">
+  <ItemGroup>
+    <PluginFiles Include="$(TargetDir)**\*.dll" />
+  </ItemGroup>
+  <Copy SourceFiles="@(PluginFiles)"
+        DestinationFolder="C:\cs2-ds\game\csgo\addons\counterstrikesharp\plugins\TasePlugin" />
+</Target>
+</Project>
