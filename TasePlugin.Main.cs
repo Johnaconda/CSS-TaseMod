@@ -1,237 +1,277 @@
-// TasePlugin.Main.cs — Canonical “Mainfile” (Authoritative, wired-up)
-//
-// Keep this file as the authoritative map of the plugin. Implementations of
-// subsystems can live in partials (e.g., Tase.PhysGun.cs), referenced via
-// partial methods below so the project compiles even when a subsystem is
-// temporarily absent.
-
+// TasePlugin.Main.cs — TASE core + titles/roles + help commands (fixed DataPath + SayTo)
 using System;
+using System.Collections.Generic;
 using System.IO;
-using CounterStrikeSharp.API;
-using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API;                 // RegisterListener<...>
+using CounterStrikeSharp.API.Core;            // BasePlugin, CCSPlayerController
 using CounterStrikeSharp.API.Modules.Commands;
-using Newtonsoft.Json;
 
 namespace Tase
 {
+    // Roles used by TASE (matches TitleClass.MinRole)
+    public enum TaseRole { None = 0, BlockMaker = 1, BlockBuster = 2, Admin = 3, GoD = 4 }
+
+    public sealed class TaseConfig
+    {
+        public int  PhysMaxDistance { get; set; } = 1200;
+        public bool PhysSafeMode    { get; set; } = true;
+    }
+
     public partial class TasePlugin : BasePlugin
     {
-        public override string ModuleName => "TASE";
-        public override string ModuleAuthor => "You + ChatGPT";
-        public override string ModuleVersion => "0.2-mainfile";
+        public override string ModuleName    => "TASE";
+        public override string ModuleVersion => "0.6.1";
+        public override string ModuleAuthor  => "you + assistant";
 
-        // ==== Paths =========================================================
-        public static readonly string DataRoot      = Path.Combine(Server.DataPath, "tase");
-        public static readonly string LogsDir       = Path.Combine(DataRoot, "logs");
-        public static readonly string TitlesMapPath = Path.Combine(DataRoot, "titles.json");
-        public static readonly string TitlesDir     = Path.Combine(DataRoot, "titles");
-        public static readonly string RolesPath     = Path.Combine(DataRoot, "roles.json");
-        public static readonly string ConfigPath    = Path.Combine(DataRoot, "tase_config.json");
-        public static readonly string AppealsPath   = Path.Combine(DataRoot, "appeals.json");
-        public static readonly string JailDir       = Path.Combine(DataRoot, "jail");
-        public static readonly string BlocksDir     = Path.Combine(DataRoot, "blocks");
+        internal static TaseConfig Config = new();
 
-        // ==== Config ========================================================
-        public class TaseConfig
-        {
-            public bool UseClanTagForTitles { get; set; } = true;
-            public bool PhysSafeMode         { get; set; } = true;
-            public int  PhysMaxDistance      { get; set; } = 800;
-            public int  JailDefaultDuration  { get; set; } = 300; // seconds
-            public int  AutosaveBlocksSeconds{ get; set; } = 60;
-        }
+        // ---- Data paths (portable across CSS# versions) ----
+        // Root: <server>/addons/counterstrikesharp/data/tase
+        private static string DataRoot =>
+            Path.Combine(AppContext.BaseDirectory, "addons", "counterstrikesharp", "data", "tase");
 
-        public static TaseConfig Config = new();
+        private static string TitlesMapPath =>
+            Path.Combine(DataRoot, "titles.json");
 
-        // ==== Lifecycle =====================================================
         public override void Load(bool hotReload)
         {
-            try
-            {
-                EnsureDirectories();
-                LoadConfig();
-                RolesManager.Load(RolesPath);
-                TitlesManager.Load(TitlesMapPath); // also loads classes in TitlesDir
-                Logger.Init(LogsDir);
-
-                RegisterCommands();
-                RegisterEventHooks();
-
-                Logger.Info($"[TASE] Loaded (hotReload={hotReload}).");
-            }
-            catch (Exception ex)
-            {
-                try
-                {
-                    Directory.CreateDirectory(LogsDir);
-                    File.AppendAllText(Path.Combine(LogsDir, "fatal.log"), DateTime.UtcNow + " " + ex + "\n");
-                }
-                catch { /* ignore */ }
-                throw;
-            }
-        }
-
-        public override void Unload(bool hotReload)
-        {
-            SaveAll();
-            Logger.Info($"[TASE] Unloaded (hotReload={hotReload}).");
-        }
-
-        // ==== Boot Helpers ==================================================
-        private void EnsureDirectories()
-        {
+            // Ensure titles DB exists and is loaded
             Directory.CreateDirectory(DataRoot);
-            Directory.CreateDirectory(LogsDir);
-            Directory.CreateDirectory(TitlesDir);
-            Directory.CreateDirectory(JailDir);
-            Directory.CreateDirectory(BlocksDir);
-            EnsureFile(ConfigPath, "{\n  \"UseClanTagForTitles\": true\n}\n");
-            EnsureFile(TitlesMapPath, "{}\n");
+            TitlesManager.Load(TitlesMapPath);
+
+            // ===== Commands (current) =====
+            AddCommand("tase",           "Show TASE help",                CmdTaseHelp);
+            AddCommand("tase_help",      "Show TASE help",                CmdTaseHelp);
+            AddCommand("tase_version",   "Show TASE version",             CmdTaseVersion);
+
+            // Title admin: set/clear/list/me
+            AddCommand("tase_make_god",   "Make a player GoD: tase_make_god <steamid64>",     CmdMakeGod);
+            AddCommand("tase_make_admin", "Make a player Admin: tase_make_admin <steamid64>", CmdMakeAdmin);
+            AddCommand("tase_title_set",  "Set title: tase_title_set <steamid64> <title>",    CmdTitleSet);
+            AddCommand("tase_title_clear","Clear title: tase_title_clear <steamid64>",        CmdTitleClear);
+            AddCommand("tase_titles_list","List all titles",                                   CmdTitlesList);
+            AddCommand("tase_me",         "Show my title/privileges",                          CmdTaseMe);
+			AddCommand("tase_jail",   "tase_jail <steamid64> <seconds>", CmdJail);
+			AddCommand("tase_unjail", "tase_unjail <steamid64>",         CmdUnjail);
+			AddCommand("tase_ui", "Open TASE UI (shows status; admins see advanced)", CmdTaseUi);
+			
+			
+            // Tools
+            AddCommand("grab",           "Toggle Physics Gun (requires UsePhysGun or GoD)", CmdGrab);
+
+            // ===== Listeners =====
+            RegisterListener<Listeners.OnTick>(() => Phys_OnTick());
+            RegisterListener<Listeners.OnMapEnd>(() => Phys_OnMapEnd(Server.MapName ?? "<unknown>"));
+            // Optional disconnect cleanup if available:
+            // RegisterListener<Listeners.OnClientDisconnectPost>((CCSPlayerController player) => Phys_OnPlayerDisconnected(player));
         }
 
-        private static void EnsureFile(string path, string defaultContent)
-        {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            if (!File.Exists(path)) File.WriteAllText(path, defaultContent);
-        }
+        // -------------------- HELP COMMANDS --------------------
+		
+		private void CmdTaseUi(CCSPlayerController? caller, CommandInfo _)
+		{
+			if (caller == null) { Console.WriteLine("[TASE] tase_ui is player-only."); return; }
+		
+			var sid = caller.SteamID;
+			var (role, privs, _) = TitlesManager.ResolveFor(sid);
+			var title = TitlesManager.Get(sid) ?? role.ToString();
+		
+			// Define what "elevated" means in UI (admins/mods/god etc)
+			bool isElevated = role >= TaseRole.Admin || (privs & TasePrivilege.Operator) != 0 || role >= TaseRole.GoD;
+		
+			// Always tell the player their status (safe for normals)
+			SayTo(caller, $"[TASE] v{ModuleVersion} — Role: {role} {(title!=role.ToString() ? $"[{title}]" : "")}");
+		
+			// Try to push client cvars (only if your CSS# build supports ExecuteClientCommand).
+			// If it doesn't, just leave this compiled out; the UI still shows minimal bar.
+		#if TASE_HAS_CLIENTCMD
+			TryPushRoleToClient(caller, title, role.ToString(), isElevated, ModuleVersion);
+		#endif
+		
+			// Tip to open the local UI overlay
+			SayTo(caller, "[TASE] UI requested. If you don’t see it, install the Panorama addon and use ui_reload_panorama.");
+		}
+		
+		#if TASE_HAS_CLIENTCMD
+		private static void TryPushRoleToClient(CCSPlayerController p, string title, string role, bool elevated, string version)
+		{
+			void Exec(string cmd) { try { p.ExecuteClientCommand(cmd); } catch { /* ignore if not supported */ } }
+			// Quote-safe
+			string q(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
+		
+			Exec($"tase_ui_version {q(version)}");
+			Exec($"tase_ui_role {q(role)}");
+			Exec($"tase_ui_title {q(title)}");
+			Exec($"tase_ui_elevated {(elevated ? 1 : 0)}");
+			Exec("tase_ui_open 1");
+		}
+		#endif
+		
+		private void CmdJail(CCSPlayerController? caller, CommandInfo info)
+		{
+			if (info.ArgCount < 3) { SayTo(caller, "Usage: tase_jail <steamid64> <seconds>"); return; }
+			if (!CanEditTitles(caller)) { SayTo(caller, "No permission."); return; }
+			if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Bad steamid64"); return; }
+			if (!int.TryParse(info.GetArg(2), out var secs)) secs = 60;
+			// TODO: call your JailManager here
+			SayTo(caller, $"[TASE] (stub) Jailed {sid} for {secs}s.");
+		}
+		
+		private void CmdUnjail(CCSPlayerController? caller, CommandInfo info)
+		{
+			if (info.ArgCount < 2) { SayTo(caller, "Usage: tase_unjail <steamid64>"); return; }
+			if (!CanEditTitles(caller)) { SayTo(caller, "No permission."); return; }
+			if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Bad steamid64"); return; }
+			// TODO: call your JailManager here
+			SayTo(caller, $"[TASE] (stub) Unjailed {sid}.");
+		}
+		
+        private void CmdTaseHelp(CCSPlayerController? caller, CommandInfo _)
+            => SendLines(caller, GetHelpLines());
 
-        private void LoadConfig()
-        {
-            try
+        private void CmdTaseVersion(CCSPlayerController? caller, CommandInfo _)
+            => SendLines(caller, new[]
             {
-                var txt = File.ReadAllText(ConfigPath);
-                Config = JsonConvert.DeserializeObject<TaseConfig>(txt) ?? new TaseConfig();
-            }
-            catch { Config = new TaseConfig(); }
-        }
-
-        private void SaveAll()
-        {
-            // TODO: if any in-memory state needs flushing, do it here
-        }
-
-        // ==== Commands ======================================================
-        private void RegisterCommands()
-        {
-            CommandHandler.RegisterCommands(); // existing module keeps all chat/console commands
-
-            // Minimal built-in utility: reload config & titles
-            Server.AddConsoleCommand("tase_mod_reload", info =>
-            {
-                if (!Server.CallerIsRconOrConsole(info)) { Server.ConsoleWriteLine("RCON/console only."); return; }
-                LoadConfig();
-                TitlesManager.Load(TitlesMapPath);
-                Server.ConsoleWriteLine("[TASE] Config & Titles reloaded.");
+                $"[TASE] {ModuleName} v{ModuleVersion} by {ModuleAuthor}",
+                $"[TASE] PhysMaxDistance={Config.PhysMaxDistance}, PhysSafeMode={Config.PhysSafeMode}"
             });
 
-            // Diagnostic
-            Server.AddConsoleCommand("tase_mod_diag", info =>
+        private string[] GetHelpLines()
+        {
+            var lines = new List<string>
             {
-                if (!Server.CallerIsRconOrConsole(info)) { Server.ConsoleWriteLine("RCON/console only."); return; }
-                int count = 0;
-                if (Directory.Exists(TitlesDir)) count = Directory.GetFiles(TitlesDir, "*.json").Length;
-                Server.ConsoleWriteLine($"[TASE] players={Server.PlayerCount} titles={count}");
-            });
+                $"[TASE] {ModuleName} — Admin Toolbox",
+                $"[TASE] Version: {ModuleVersion}",
+                "[TASE] Commands:",
+                "  tase / tase_help                   — Show this help",
+                "  tase_version                       — Show plugin version & config",
+                "  tase_me                            — Show your title/privileges",
+                "  grab                               — Toggle Physics Gun (needs UsePhysGun or GoD)",
+                "  tase_titles_list                   — List current SteamID64 → Title mappings",
+                "  tase_title_set <steamid64> <title> — Assign a title to a player",
+                "  tase_title_clear <steamid64>       — Clear a player's title",
+                "  tase_make_admin <steamid64>        — Create/ensure 'Admin' class and assign it",
+                "  tase_make_god <steamid64>          — Create/ensure 'GoD' class and assign it",
+                "[TASE] Files:",
+                $"  • Titles DB: {TitlesMapPath}",
+                $"  • Title classes: {Path.Combine(DataRoot, "titles", "<TitleName>.json")}",
+            };
+            return lines.ToArray();
         }
 
-        // ==== Events / Hooks ===============================================
-        private void RegisterEventHooks()
+        private static void SendLines(CCSPlayerController? to, IEnumerable<string> lines)
         {
-            Server.HookPlayerConnected(OnPlayerConnected);
-            Server.HookPlayerDisconnected(OnPlayerDisconnected);
-            Server.HookMapStart(OnMapStart);
-            Server.HookMapEnd(OnMapEnd);
-            Server.HookTick(OnTick);
+            if (to == null) { foreach (var l in lines) Console.WriteLine(l); return; }
+            foreach (var l in lines) { try { to.PrintToChat(l); } catch { } }
         }
 
-        private void OnPlayerConnected(Player player)
+        // Simple chat/console helper used across commands
+        internal static void SayTo(CCSPlayerController? p, string text)
         {
-            // Resolve title → privileges/vars
-            var (minRole, privs, vars) = TitlesManager.ResolveFor(player.SteamId64);
-            if (minRole > RolesManager.GetRole(player.SteamId64))
-                RolesManager.SetRole(player.SteamId64, minRole);
-            if ((privs & TasePrivilege.Operator) != 0)
-                RolesManager.SetRole(player.SteamId64, TaseRole.GoD);
-
-            PlayerVarCache.Set(player.SteamId64, vars);
-
-            if (Config.UseClanTagForTitles)
-            {
-                var title = TitlesManager.Get(player.SteamId64);
-                if (!string.IsNullOrEmpty(title)) { try { player.SetClanTag(title); } catch { } }
-            }
-
-            // Module hooks (optional; implement in partials)
-            Jail_OnPlayerConnected(player);
-            Phys_OnPlayerConnected(player);
-            Blocks_OnPlayerConnected(player);
+            if (p == null) { Console.WriteLine(text); return; }
+            try { p.PrintToChat(text); } catch { /* ignore */ }
         }
 
-        private void OnPlayerDisconnected(Player player)
+        // -------------------- TITLE COMMANDS --------------------
+        private void CmdMakeGod(CCSPlayerController? caller, CommandInfo info)
         {
-            Jail_OnPlayerDisconnected(player);
-            Phys_OnPlayerDisconnected(player);
-            Blocks_OnPlayerDisconnected(player);
+            if (info.ArgCount < 2) { SayTo(caller, "Usage: tase_make_god <steamid64>"); return; }
+            if (!CanEditTitles(caller)) { SayTo(caller, "No permission to edit titles."); return; }
+
+            if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Invalid steamid64."); return; }
+
+            var cls = TitlesManager.EnsureClass("GoD");
+            cls.MinRole = TaseRole.GoD;
+            cls.Privileges = TasePrivilege.BuildBlocks | TasePrivilege.BustBlocks |
+                             TasePrivilege.UsePhysGun | TasePrivilege.JailPower  |
+                             TasePrivilege.Operator;
+            TitlesManager.SaveClass(cls);
+            TitlesManager.Set(sid, "GoD");
+
+            SayTo(caller, $"[TASE] {sid} is now GoD.");
         }
 
-        private void OnMapStart(string map)
+        private void CmdMakeAdmin(CCSPlayerController? caller, CommandInfo info)
         {
-            Jail_OnMapStart(map);
-            Phys_OnMapStart(map);
-            Blocks_OnMapStart(map);
+            if (info.ArgCount < 2) { SayTo(caller, "Usage: tase_make_admin <steamid64>"); return; }
+            if (!CanEditTitles(caller)) { SayTo(caller, "No permission to edit titles."); return; }
+
+            if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Invalid steamid64."); return; }
+
+            var cls = TitlesManager.EnsureClass("Admin");
+            cls.MinRole = TaseRole.Admin;
+            cls.Privileges = TasePrivilege.BuildBlocks | TasePrivilege.BustBlocks |
+                             TasePrivilege.UsePhysGun | TasePrivilege.JailPower;
+            TitlesManager.SaveClass(cls);
+            TitlesManager.Set(sid, "Admin");
+
+            SayTo(caller, $"[TASE] {sid} is now Admin.");
         }
 
-        private void OnMapEnd(string map)
+        private void CmdTitleSet(CCSPlayerController? caller, CommandInfo info)
         {
-            Jail_OnMapEnd(map);
-            Phys_OnMapEnd(map);
-            Blocks_OnMapEnd(map);
+            if (info.ArgCount < 3) { SayTo(caller, "Usage: tase_title_set <steamid64> <title>"); return; }
+            if (!CanEditTitles(caller)) { SayTo(caller, "No permission to edit titles."); return; }
+
+            if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Invalid steamid64."); return; }
+            var title = info.GetArg(2);
+            TitlesManager.Set(sid, title);
+            SayTo(caller, $"[TASE] {sid} → '{title}'");
         }
 
-        private void OnTick()
+        private void CmdTitleClear(CCSPlayerController? caller, CommandInfo info)
         {
-            Phys_OnTick(); // smoothing, safety checks
+            if (info.ArgCount < 2) { SayTo(caller, "Usage: tase_title_clear <steamid64>"); return; }
+            if (!CanEditTitles(caller)) { SayTo(caller, "No permission to edit titles."); return; }
+
+            if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Invalid steamid64."); return; }
+            var had = TitlesManager.Clear(sid);
+            SayTo(caller, had ? $"[TASE] Cleared title for {sid}." : $"[TASE] No title set for {sid}.");
         }
 
-        // ==== Public Helpers (shared across modules) ========================
-        public static string GetPlayerTitle(ulong steamId) => TitlesManager.Get(steamId);
-
-        public static int GetIntVar(ulong sid, string key, int fallback)
+        private void CmdTitlesList(CCSPlayerController? caller, CommandInfo _)
         {
-            var s = PlayerVarCache.Get(sid, key, fallback.ToString());
-            return int.TryParse(s, out var v) ? v : fallback;
+            var list = new List<string> { "[TASE] Current titles:" };
+            foreach (var (sid, title) in TitlesManager.All())
+                list.Add($"  {sid} → {title}");
+            SendLines(caller, list);
         }
 
-        public static bool HasPrivilege(ulong sid, TasePrivilege p)
+        private void CmdTaseMe(CCSPlayerController? caller, CommandInfo _)
         {
-            var (minRole, privs, _) = TitlesManager.ResolveFor(sid);
-            if ((privs & p) != 0) return true;
-            // Role-based fallback for legacy gates
-            return p == TasePrivilege.Operator && RolesManager.GetRole(sid) >= TaseRole.GoD;
+            if (caller == null) { SayTo(caller, "[TASE] Run this as a player."); return; }
+            var (minRole, privs, _) = TitlesManager.ResolveFor(caller.SteamID);
+            SayTo(caller, $"[TASE] You are '{TitlesManager.Get(caller.SteamID)}' (role {minRole}).");
+            SayTo(caller, $"[TASE] Privileges: {privs}");
         }
 
-        public static void Say(string msg) => Server.SayToAll(msg);
-        public static void SayTo(Player p, string msg) => p.Reply(msg);
+        private static bool CanEditTitles(CCSPlayerController? caller)
+        {
+            // Console/RCON always allowed
+            if (caller == null) return true;
+            // Allow GoD or Operator privilege to edit titles
+            var (role, privs, _) = TitlesManager.ResolveFor(caller.SteamID);
+            return role >= TaseRole.GoD || (privs & TasePrivilege.Operator) != 0;
+        }
 
-        // ==== Partial hooks (optional implementations in other files) =======
-        // PhysGun
+        // -------------------- Permission helpers --------------------
+        internal static bool HasAtLeast(CCSPlayerController? p, TaseRole min)
+        {
+            if (p == null) return true; // console
+            var (role, _, _) = TitlesManager.ResolveFor(p.SteamID);
+            return role >= min;
+        }
+
+        internal static bool HasPrivilege(CCSPlayerController? p, TasePrivilege need)
+        {
+            if (p == null) return true; // console
+            var (_, privs, _) = TitlesManager.ResolveFor(p.SteamID);
+            return (privs & need) != 0;
+        }
+
+        // -------------------- Phys hooks (implemented in PhysGun partial) --------------------
         partial void Phys_OnTick();
-        partial void Phys_OnPlayerConnected(Player p);
-        partial void Phys_OnPlayerDisconnected(Player p);
-        partial void Phys_OnMapStart(string map);
+        partial void Phys_OnPlayerDisconnected(CCSPlayerController p);
         partial void Phys_OnMapEnd(string map);
-
-        // Jail
-        partial void Jail_OnPlayerConnected(Player p);
-        partial void Jail_OnPlayerDisconnected(Player p);
-        partial void Jail_OnMapStart(string map);
-        partial void Jail_OnMapEnd(string map);
-
-        // Blocks
-        partial void Blocks_OnPlayerConnected(Player p);
-        partial void Blocks_OnPlayerDisconnected(Player p);
-        partial void Blocks_OnMapStart(string map);
-        partial void Blocks_OnMapEnd(string map);
     }
 }

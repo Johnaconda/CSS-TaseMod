@@ -1,0 +1,37 @@
+---------Usage in Powershell Adminstrator mode:-----------
+
+# Example: default locations
+powershell -ExecutionPolicy Bypass -File C:\cs2-ds\set-system-tase-env.ps1 -AddCssharpDirToPath
+
+# Example: custom client path \/
+
+------------------------------------------------------------------------------------
+powershell -ExecutionPolicy Bypass -File C:\cs2-ds\set-system-tase-env.ps1 `
+  -ServerRoot "C:\cs2-ds" `
+  -ClientRoot "E:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive" `
+  -AddCssharpDirToPath
+-------------------------------------------------------------------------------------
+
+Verify (from any new PowerShell) \/
+
+[Environment]::GetEnvironmentVariable('CS2_SERVER_ROOT','Machine')
+[Environment]::GetEnvironmentVariable('CSSHARP_DIR','Machine')
+[Environment]::GetEnvironmentVariable('CS2_CLIENT_ROOT','Machine')
+[Environment]::GetEnvironmentVariable('TASE_PANO_ROOT','Machine')
+
+Note: Existing shells won’t auto-refresh their copy; open a new PowerShell, or in the current one you can “pull” machine values into the process with:
+
+$env:CS2_SERVER_ROOT = [Environment]::GetEnvironmentVariable('CS2_SERVER_ROOT','Machine')
+$env:CSSHARP_DIR     = [Environment]::GetEnvironmentVariable('CSSHARP_DIR','Machine')
+$env:CS2_CLIENT_ROOT = [Environment]::GetEnvironmentVariable('CS2_CLIENT_ROOT','Machine')
+$env:TASE_PANO_ROOT  = [Environment]::GetEnvironmentVariable('TASE_PANO_ROOT','Machine')
+
+Optional: Unset script (cleanup)
+# C:\cs2-ds\unset-system-tase-env.ps1 (run as Admin)
+[Environment]::SetEnvironmentVariable('CS2_SERVER_ROOT',$null,'Machine')
+[Environment]::SetEnvironmentVariable('CSSHARP_DIR',$null,'Machine')
+[Environment]::SetEnvironmentVariable('CS2_CLIENT_ROOT',$null,'Machine')
+[Environment]::SetEnvironmentVariable('TASE_PANO_ROOT',$null,'Machine')
+# (Optionally remove from PATH—manual/with care to avoid truncating)
+
+With these machine-level vars in place, your compile.ps1 (and any other scripts) can just read CSSHARP_DIR, CS2_SERVER_ROOT, CS2_CLIENT_ROOT, and TASE_PANO_ROOT without worrying about per-window scope—exactly like traditional C++ SDK environment setups.

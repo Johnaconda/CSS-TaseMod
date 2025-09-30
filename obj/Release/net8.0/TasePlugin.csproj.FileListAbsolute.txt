@@ -1,0 +1,13 @@
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.csproj.AssemblyReference.cache
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.GeneratedMSBuildEditorConfig.editorconfig
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.AssemblyInfoInputs.cache
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.AssemblyInfo.cs
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.csproj.CoreCompileInputs.cache
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.sourcelink.json
+C:\GitHub\LocalRepo\CSS-TaseMod\bin\Release\net8.0\TasePlugin.deps.json
+C:\GitHub\LocalRepo\CSS-TaseMod\bin\Release\net8.0\TasePlugin.dll
+C:\GitHub\LocalRepo\CSS-TaseMod\bin\Release\net8.0\TasePlugin.pdb
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.dll
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\refint\TasePlugin.dll
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\TasePlugin.pdb
+C:\GitHub\LocalRepo\CSS-TaseMod\obj\Release\net8.0\ref\TasePlugin.dll
