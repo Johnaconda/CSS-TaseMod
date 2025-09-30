@@ -5,18 +5,26 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- We’ll include files via a glob from /src -->
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <!-- Optional: define TASE_HAS_CLIENTCMD if client command push is supported -->
-    <!-- <DefineConstants>TASE_HAS_CLIENTCMD</DefineConstants> -->
+    <!-- Optional: give the DLL a stable name -->
+    <AssemblyName>TasePlugin</AssemblyName>
   </PropertyGroup>
 
+  <!-- Compile all C# files under src\ recursively -->
   <ItemGroup>
-    <Compile Include="TasePlugin.Main.cs" />
-    <Compile Include="Tase.PhysGun.cs" />
-    <Compile Include="Tase.Movement.cs" />
-    <Compile Include="TitleClass.cs" />
-    <Compile Include="TitlesManager.cs" />
+    <Compile Include="src\**\*.cs" />
   </ItemGroup>
 
-  <!-- (Reference includes and package references unchanged) -->
+  <!-- Reference CSS# API via env var or local lib (compile.ps1 stages a copy into /lib as a fallback) -->
+  <ItemGroup>
+    <Reference Include="CounterStrikeSharp.API">
+      <HintPath>$(CSSHARP_DIR)\CounterStrikeSharp.API.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="CounterStrikeSharp.API.Fallback" Condition=" '$(CSSHARP_DIR)' == '' ">
+      <HintPath>lib\CounterStrikeSharp.API.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
 </Project>

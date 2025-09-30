@@ -71,6 +71,16 @@ namespace Tase
 
             plugin.AddCommand("bmtoggle", "Toggle BlockMaker UI", plugin.CmdBlockMakerToggle);
             Commands.Add(new CommandEntry("bmtoggle", "", "Toggle BlockMaker panel (map editor UI)", TaseRole.None, TasePrivilege.BuildBlocks));
-        }
+        
+		// NEW: install alias profiles on the client (best-effort) so players can toggle binds locally
+            plugin.AddCommand("pgbinds", "Install PhysGun alias profiles", plugin.CmdPgBinds);
+            Commands.Add(new CommandEntry("pgbinds", "", "Install PhysGun bind toggle aliases (client)", TaseRole.None));
+
+            // NEW: server-side helper to call the client's pg_mode alias (if installed)
+            plugin.AddCommand("pgmode", "Toggle PhysGun bind mode", plugin.CmdPgMode);
+            Commands.Add(new CommandEntry("pgmode", "", "Toggle client alias 'pg_mode' (if installed)", TaseRole.None));
+		
+		
+		}
     }
 }

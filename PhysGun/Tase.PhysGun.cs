@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using CounterStrikeSharp.API.Core;
 
@@ -22,6 +23,8 @@ namespace Tase
         private const float MinHoldDistance = 48f;
         private const float WheelStep = 32f;
 
+        // ---------------- Commands ----------------
+
         private void CmdGrab(CCSPlayerController? caller, CommandInfo info)
         {
             if (caller != null && !HasPrivilege(caller, TasePrivilege.UsePhysGun) && !HasAtLeast(caller, TaseRole.GoD))
@@ -42,62 +45,51 @@ namespace Tase
                 }
                 _controllerRefs.Remove(sid);
                 SayTo(caller, "[PhysGun] Disabled.");
-
-#if TASE_HAS_CLIENTCMD
-                // Restore user’s normal binds (best-effort)
-                PushClientBinds(caller, enable:false);
-#endif
             }
             else
             {
                 _physGunEnabled.Add(sid);
                 _controllerRefs[sid] = new WeakReference<CCSPlayerController>(caller);
                 SayTo(caller, "[PhysGun] Enabled. LMB=grab, RMB=rotate, R=freeze, Shift=noclip, Wheel=distance.");
-
-#if TASE_HAS_CLIENTCMD
-                // Install temporary binds/aliases on client (opt-in; best-effort)
-                PushClientBinds(caller, enable:true);
-#endif
             }
         }
 
-#if TASE_HAS_CLIENTCMD
-        private static void PushClientBinds(CCSPlayerController p, bool enable)
+        // Push alias profile (on-demand) to let players toggle between "PhysGun mode binds" and their defaults.
+        // Usage (client): bind "ALT" "pg_mode"
+        // Then press ALT to switch between +pg_* and default combat binds.
+        private void CmdPgBinds(CCSPlayerController? caller, CommandInfo _)
         {
-            void Exec(string cmd) { try { p.ExecuteClientCommand(cmd); } catch { } }
-            if (enable)
-            {
-                Exec("alias +pg_m1 +physgun_attack");
-                Exec("alias -pg_m1 -physgun_attack");
-                Exec("alias +pg_m2 +physgun_attack2");
-                Exec("alias -pg_m2 -physgun_attack2");
-                Exec("alias +pg_r +physgun_reload");
-                Exec("alias -pg_r -physgun_reload");
-                Exec("alias +pg_shift +physgun_speed");
-                Exec("alias -pg_shift -physgun_speed");
-                Exec("alias pg_wup +physgun_wup");
-                Exec("alias pg_wdown +physgun_wdown");
-
-                // Note: we don't override their combat binds; users can bind these in a cfg if they want.
-                // Provide a hint instead:
-                TasePlugin.SayTo(p, "[PhysGun] Tip: bind MOUSE1 \"+pg_m1\"; MOUSE2 \"+pg_m2\"; R \"+pg_r\"; SHIFT \"+pg_shift\"; MWHEELUP \"pg_wup\"; MWHEELDOWN \"pg_wdown\"");
-            }
-            else
-            {
-                // Clear aliases (no unbinds to avoid clobbering user settings)
-                Exec("alias +pg_m1 \"\"");
-                Exec("alias -pg_m1 \"\"");
-                Exec("alias +pg_m2 \"\"");
-                Exec("alias -pg_m2 \"\"");
-                Exec("alias +pg_r \"\"");
-                Exec("alias -pg_r \"\"");
-                Exec("alias +pg_shift \"\"");
-                Exec("alias -pg_shift \"\"");
-                Exec("alias pg_wup \"\"");
-                Exec("alias pg_wdown \"\"");
-            }
-        }
+            if (caller == null) return;
+#if TASE_HAS_CLIENTCMD
+            InstallClientBindAliases(caller);
+            SayTo(caller, "[PhysGun] Installed alias toggle. Tip: bind \"ALT\" \"pg_mode\"");
+#else
+            SayTo(caller, "[PhysGun] Client command push disabled in this build.");
+            SayTo(caller, "Paste this into your console/autoexec to set up a toggle:");
+            SayTo(caller, "alias +pg_m1 +physgun_attack; alias -pg_m1 -physgun_attack");
+            SayTo(caller, "alias +pg_m2 +physgun_attack2; alias -pg_m2 -physgun_attack2");
+            SayTo(caller, "alias +pg_r +physgun_reload; alias -pg_r -physgun_reload");
+            SayTo(caller, "alias +pg_shift +physgun_speed; alias -pg_shift -physgun_speed");
+            SayTo(caller, "alias pg_wup +physgun_wup; alias pg_wdown +physgun_wdown");
+            SayTo(caller, "alias pg_mode_on \"bind mouse1 +pg_m1; bind mouse2 +pg_m2; bind r +pg_r; bind shift +pg_shift; bind mwheelup pg_wup; bind mwheeldown pg_wdown; alias pg_mode pg_mode_off\"");
+            SayTo(caller, "alias pg_mode_off \"bind mouse1 +attack; bind mouse2 +attack2; bind r +reload; bind shift +speed; bind mwheelup invprev; bind mwheeldown invnext; alias pg_mode pg_mode_on\"");
+            SayTo(caller, "alias pg_mode pg_mode_on; bind ALT pg_mode");
 #endif
+        }
+
+        // Convenience server-side trigger: /pgmode will call the client's pg_mode alias (if installed)
+        private void CmdPgMode(CCSPlayerController? caller, CommandInfo _)
+        {
+            if (caller == null) return;
+#if TASE_HAS_CLIENTCMD
+            try { caller.ExecuteClientCommand("pg_mode"); } catch {}
+            SayTo(caller, "[PhysGun] Toggled bind mode (pg_mode).");
+#else
+            SayTo(caller, "[PhysGun] This build cannot execute client aliases. Use: bind ALT pg_mode");
+#endif
+        }
+
+        // ---------------- Tick ----------------
 
         partial void Phys_OnTick()
         {
@@ -108,7 +100,6 @@ namespace Tase
                 if (!_controllerRefs.TryGetValue(sid, out var wref) || !wref.TryGetTarget(out var player) || player == null)
                     continue;
 
-                // inputs
                 bool pressLMB     = InputBridge.WasButtonPressed(player, InputBridge.InputButton.Attack);
                 bool releaseLMB   = InputBridge.WasButtonReleased(player, InputBridge.InputButton.Attack);
                 bool pressRMB     = InputBridge.WasButtonPressed(player, InputBridge.InputButton.Attack2);
@@ -120,19 +111,9 @@ namespace Tase
 
                 if (_grabbed.TryGetValue(sid, out var grab))
                 {
-                    // Adjust distance via wheel
-                    if (wheelUp)
-                    {
-                        grab.HoldDistance = MathF.Min(grab.HoldDistance + WheelStep, Config.PhysMaxDistance);
-                        SayTo(player, $"[PhysGun] Distance: {grab.HoldDistance:0}");
-                    }
-                    if (wheelDown)
-                    {
-                        grab.HoldDistance = MathF.Max(grab.HoldDistance - WheelStep, MinHoldDistance);
-                        SayTo(player, $"[PhysGun] Distance: {grab.HoldDistance:0}");
-                    }
+                    if (wheelUp)   { grab.HoldDistance = MathF.Min(grab.HoldDistance + WheelStep, Config.PhysMaxDistance); SayTo(player, $"[PhysGun] Distance: {grab.HoldDistance:0}"); }
+                    if (wheelDown) { grab.HoldDistance = MathF.Max(grab.HoldDistance - WheelStep, MinHoldDistance);       SayTo(player, $"[PhysGun] Distance: {grab.HoldDistance:0}"); }
 
-                    // Release
                     if (releaseLMB)
                     {
                         ReleaseGrab(player, grab);
@@ -140,8 +121,6 @@ namespace Tase
                         SayTo(player, "[PhysGun] Released.");
                         continue;
                     }
-
-                    // Rotate (90° yaw step)
                     if (pressRMB)
                     {
                         var ang = grab.Entity.GetAngles();
@@ -149,8 +128,6 @@ namespace Tase
                         grab.Entity.SetAngles(ang);
                         SayTo(player, $"[PhysGun] Rotated entity {grab.EntityId}.");
                     }
-
-                    // Freeze
                     if (pressReload && !grab.Frozen)
                     {
                         grab.Frozen = true;
@@ -161,14 +138,12 @@ namespace Tase
                         continue;
                     }
 
-                    // Optional noclip passthrough while holding (disabled if SafeMode true, since SafeMode already disables collisions)
                     if (!Config.PhysSafeMode)
                     {
                         if (pressShift && !grab.Noclip) { grab.Noclip = true;  grab.Entity.SetCollisionEnabled(false); }
                         if (releaseShift && grab.Noclip){ grab.Noclip = false; grab.Entity.SetCollisionEnabled(true);  }
                     }
 
-                    // Move toward aim point (server-authoritative)
                     var eyePos   = GetEyePosition(player);
                     var aimDir   = GetAimDirection(player);
                     float dist   = MathF.Min(MathF.Max(grab.HoldDistance <= 0 ? 150f : grab.HoldDistance, MinHoldDistance), Config.PhysMaxDistance);
@@ -186,8 +161,7 @@ namespace Tase
                         var eye = GetEyePosition(player);
                         var dir = GetAimDirection(player);
 
-                        // TODO: replace stub with CS2 raycast API when available
-                        var tr = Physics.Raycast(eye, dir, Config.PhysMaxDistance);
+                        var tr = Physics.Raycast(eye, dir, Config.PhysMaxDistance); // TODO: real CS2 trace
                         if (tr.Entity != null && tr.Entity.IsValid() && tr.Entity.ClassName != "player")
                         {
                             var g = new GrabState
@@ -249,12 +223,42 @@ namespace Tase
             g.Entity.SetCollisionEnabled(true);
         }
 
+#if TASE_HAS_CLIENTCMD
+        // Installs two alias profiles on client and a toggle entrypoint "pg_mode".
+        private static void InstallClientBindAliases(CCSPlayerController p)
+        {
+            void Exec(string cmd) { try { p.ExecuteClientCommand(cmd); } catch {} }
+
+            // Core +pg_* aliases (edge handlers already registered server-side via InputBridge)
+            Exec("alias +pg_m1 +physgun_attack");
+            Exec("alias -pg_m1 -physgun_attack");
+            Exec("alias +pg_m2 +physgun_attack2");
+            Exec("alias -pg_m2 -physgun_attack2");
+            Exec("alias +pg_r +physgun_reload");
+            Exec("alias -pg_r -physgun_reload");
+            Exec("alias +pg_shift +physgun_speed");
+            Exec("alias -pg_shift -physgun_speed");
+            Exec("alias pg_wup +physgun_wup");
+            Exec("alias pg_wdown +physgun_wdown");
+
+            // Mode ON: bind combat keys to physgun handlers; then switch entrypoint to OFF
+            Exec("alias pg_mode_on \"bind mouse1 +pg_m1; bind mouse2 +pg_m2; bind r +pg_r; bind shift +pg_shift; bind mwheelup pg_wup; bind mwheeldown pg_wdown; alias pg_mode pg_mode_off\"");
+
+            // Mode OFF: restore vanilla CS2 defaults; then switch entrypoint to ON
+            // Adjust if your players use different defaults (they can edit after installation)
+            Exec("alias pg_mode_off \"bind mouse1 +attack; bind mouse2 +attack2; bind r +reload; bind shift +speed; bind mwheelup invprev; bind mwheeldown invnext; alias pg_mode pg_mode_on\"");
+
+            // Entrypoint starts as ON so first press enables physgun-friendly binds
+            Exec("alias pg_mode pg_mode_on");
+        }
+#endif
+
         // Aim helpers (replace with CS2 API once available)
         private static Vector3 GetEyePosition(CCSPlayerController player)  => Vector3.Zero;
         private static Vector3 GetAimDirection(CCSPlayerController player) => new Vector3(1, 0, 0);
     }
 
-    // ===== STUBS (keep until wired to engine) =====
+    // ======= STUBS =======
     internal sealed class Entity
     {
         public int EntityId { get; set; }
