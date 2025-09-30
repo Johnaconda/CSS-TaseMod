@@ -1,4 +1,3 @@
-// Tase.PhysGun.cs — Physics Gun (still using stubs for trace/entity)
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -93,7 +92,7 @@ namespace Tase
 
                     var eyePos = GetEyePosition(p);
                     var aimDir = GetAimDirection(p);
-                    var dist   = Math.Min(grab.HoldDistance <= 0 ? 150f : grab.HoldDistance, Config.PhysMaxDistance);
+                    var dist   = Math.Min(grab.HoldDistance <= 0 ? 150f : grab.HoldDistance, Config.PhysGun.MaxDistance);
                     var target = eyePos + aimDir * dist;
 
                     var cur = grab.Entity.GetOrigin();
@@ -107,7 +106,7 @@ namespace Tase
                     {
                         var eye = GetEyePosition(p);
                         var dir = GetAimDirection(p);
-                        var tr = Physics.Raycast(eye, dir, Config.PhysMaxDistance); // STUB
+                        var tr = Physics.Raycast(eye, dir, Config.PhysGun.MaxDistance); // STUB
                         if (tr.Entity != null && tr.Entity.IsValid() && tr.Entity.ClassName != "player")
                         {
                             var g = new GrabState
@@ -119,7 +118,7 @@ namespace Tase
                                 Noclip = false,
                             };
                             tr.Entity.SetFrozen(true);
-                            if (Config.PhysSafeMode)
+                            if (Config.PhysGun.SafeMode)
                             {
                                 tr.Entity.SetCollisionEnabled(false);
                                 g.Noclip = true;
@@ -169,14 +168,14 @@ namespace Tase
             g.Entity.SetCollisionEnabled(!g.Noclip);
         }
 
-        // --------- Position/Aim helpers (still stubs; safe to compile) ----------
+        // --------- Position/Aim helpers (stub implementations) ----------
         private static Vector3 GetEyePosition(CCSPlayerController p)  => Vector3.Zero;
         private static Vector3 GetAimDirection(CCSPlayerController p) => new Vector3(1, 0, 0);
     }
 
     // ===========================
     // ======== STUB AREA ========
-    // These compile-only stubs let you build now. Replace them with real CS2/CounterStrikeSharp calls later.
+    // These stubs allow compilation. Replace with actual CS2 API calls later.
     // ===========================
     internal sealed class Entity
     {

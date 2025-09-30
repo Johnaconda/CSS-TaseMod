@@ -1,9 +1,9 @@
-// TasePlugin.Main.cs — TASE core + titles/roles + help commands (fixed DataPath + SayTo)
 using System;
 using System.Collections.Generic;
 using System.IO;
-using CounterStrikeSharp.API;                 // RegisterListener<...>
-using CounterStrikeSharp.API.Core;            // BasePlugin, CCSPlayerController
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Core.Config;
 using CounterStrikeSharp.API.Modules.Commands;
 
 namespace Tase
@@ -11,19 +11,37 @@ namespace Tase
     // Roles used by TASE (matches TitleClass.MinRole)
     public enum TaseRole { None = 0, BlockMaker = 1, BlockBuster = 2, Admin = 3, GoD = 4 }
 
-    public sealed class TaseConfig
+    public sealed class PhysGunConfig
     {
-        public int  PhysMaxDistance { get; set; } = 1200;
-        public bool PhysSafeMode    { get; set; } = true;
+        public int MaxDistance { get; set; } = 1200;
+        public bool SafeMode { get; set; } = true;
     }
 
-    public partial class TasePlugin : BasePlugin
+    public sealed class MovementConfig
+    {
+        public float AirAccelerate { get; set; } = 100.0f;
+        public float AirMove { get; set; } = 10.0f;
+        public bool Emulate128Tick { get; set; } = false;
+    }
+
+    public sealed class TaseConfig : BasePluginConfig
+    {
+        public PhysGunConfig PhysGun { get; set; } = new PhysGunConfig();
+        public MovementConfig Movement { get; set; } = new MovementConfig();
+    }
+
+    public partial class TasePlugin : BasePlugin, IPluginConfig<TaseConfig>
     {
         public override string ModuleName    => "TASE";
-        public override string ModuleVersion => "0.6.1";
+        public override string ModuleVersion => "0.7.0";
         public override string ModuleAuthor  => "you + assistant";
 
         internal static TaseConfig Config = new();
+
+        public void OnConfigParsed(TaseConfig config)
+        {
+            Config = config;
+        }
 
         // ---- Data paths (portable across CSS# versions) ----
         // Root: <server>/addons/counterstrikesharp/data/tase
@@ -51,81 +69,84 @@ namespace Tase
             AddCommand("tase_title_clear","Clear title: tase_title_clear <steamid64>",        CmdTitleClear);
             AddCommand("tase_titles_list","List all titles",                                   CmdTitlesList);
             AddCommand("tase_me",         "Show my title/privileges",                          CmdTaseMe);
-			AddCommand("tase_jail",   "tase_jail <steamid64> <seconds>", CmdJail);
-			AddCommand("tase_unjail", "tase_unjail <steamid64>",         CmdUnjail);
-			AddCommand("tase_ui", "Open TASE UI (shows status; admins see advanced)", CmdTaseUi);
-			
-			
+            AddCommand("tase_jail",       "tase_jail <steamid64> <seconds>",                   CmdJail);
+            AddCommand("tase_unjail",     "tase_unjail <steamid64>",                           CmdUnjail);
+            AddCommand("tase_ui",         "Open TASE UI (shows status; admins see advanced)",  CmdTaseUi);
+
             // Tools
-            AddCommand("grab",           "Toggle Physics Gun (requires UsePhysGun or GoD)", CmdGrab);
+            AddCommand("grab",           "Toggle Physics Gun (requires UsePhysGun or GoD)",   CmdGrab);
 
             // ===== Listeners =====
             RegisterListener<Listeners.OnTick>(() => Phys_OnTick());
+            RegisterListener<Listeners.OnTick>(() => Movement_OnTick());
             RegisterListener<Listeners.OnMapEnd>(() => Phys_OnMapEnd(Server.MapName ?? "<unknown>"));
+            RegisterListener<Listeners.OnMapStart>(() => Movement_OnMapStart(Server.MapName ?? "<unknown>"));
+            RegisterListener<Listeners.OnMapEnd>(() => Movement_OnMapEnd(Server.MapName ?? "<unknown>"));
+
+            Server.ExecuteCommand($"sv_airaccelerate {Config.Movement.AirAccelerate}");
+            Server.ExecuteCommand($"sv_airmove {Config.Movement.AirMove}");
             // Optional disconnect cleanup if available:
             // RegisterListener<Listeners.OnClientDisconnectPost>((CCSPlayerController player) => Phys_OnPlayerDisconnected(player));
         }
 
         // -------------------- HELP COMMANDS --------------------
-		
-		private void CmdTaseUi(CCSPlayerController? caller, CommandInfo _)
-		{
-			if (caller == null) { Console.WriteLine("[TASE] tase_ui is player-only."); return; }
-		
-			var sid = caller.SteamID;
-			var (role, privs, _) = TitlesManager.ResolveFor(sid);
-			var title = TitlesManager.Get(sid) ?? role.ToString();
-		
-			// Define what "elevated" means in UI (admins/mods/god etc)
-			bool isElevated = role >= TaseRole.Admin || (privs & TasePrivilege.Operator) != 0 || role >= TaseRole.GoD;
-		
-			// Always tell the player their status (safe for normals)
-			SayTo(caller, $"[TASE] v{ModuleVersion} — Role: {role} {(title!=role.ToString() ? $"[{title}]" : "")}");
-		
-			// Try to push client cvars (only if your CSS# build supports ExecuteClientCommand).
-			// If it doesn't, just leave this compiled out; the UI still shows minimal bar.
-		#if TASE_HAS_CLIENTCMD
-			TryPushRoleToClient(caller, title, role.ToString(), isElevated, ModuleVersion);
-		#endif
-		
-			// Tip to open the local UI overlay
-			SayTo(caller, "[TASE] UI requested. If you don’t see it, install the Panorama addon and use ui_reload_panorama.");
-		}
-		
-		#if TASE_HAS_CLIENTCMD
-		private static void TryPushRoleToClient(CCSPlayerController p, string title, string role, bool elevated, string version)
-		{
-			void Exec(string cmd) { try { p.ExecuteClientCommand(cmd); } catch { /* ignore if not supported */ } }
-			// Quote-safe
-			string q(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
-		
-			Exec($"tase_ui_version {q(version)}");
-			Exec($"tase_ui_role {q(role)}");
-			Exec($"tase_ui_title {q(title)}");
-			Exec($"tase_ui_elevated {(elevated ? 1 : 0)}");
-			Exec("tase_ui_open 1");
-		}
-		#endif
-		
-		private void CmdJail(CCSPlayerController? caller, CommandInfo info)
-		{
-			if (info.ArgCount < 3) { SayTo(caller, "Usage: tase_jail <steamid64> <seconds>"); return; }
-			if (!CanEditTitles(caller)) { SayTo(caller, "No permission."); return; }
-			if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Bad steamid64"); return; }
-			if (!int.TryParse(info.GetArg(2), out var secs)) secs = 60;
-			// TODO: call your JailManager here
-			SayTo(caller, $"[TASE] (stub) Jailed {sid} for {secs}s.");
-		}
-		
-		private void CmdUnjail(CCSPlayerController? caller, CommandInfo info)
-		{
-			if (info.ArgCount < 2) { SayTo(caller, "Usage: tase_unjail <steamid64>"); return; }
-			if (!CanEditTitles(caller)) { SayTo(caller, "No permission."); return; }
-			if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Bad steamid64"); return; }
-			// TODO: call your JailManager here
-			SayTo(caller, $"[TASE] (stub) Unjailed {sid}.");
-		}
-		
+        private void CmdTaseUi(CCSPlayerController? caller, CommandInfo _)
+        {
+            if (caller == null) { Console.WriteLine("[TASE] tase_ui is player-only."); return; }
+
+            var sid = caller.SteamID;
+            var (role, privs, _) = TitlesManager.ResolveFor(sid);
+            var title = TitlesManager.Get(sid) ?? role.ToString();
+
+            // Define what "elevated" means in UI (admins/mods/god etc)
+            bool isElevated = role >= TaseRole.Admin || (privs & TasePrivilege.Operator) != 0 || role >= TaseRole.GoD;
+
+            // Always tell the player their status (safe for normals)
+            SayTo(caller, $"[TASE] v{ModuleVersion} — Role: {role} {(title != role.ToString() ? $"[{title}]" : "")}");
+
+            // Try to push client cvars (if supported by CounterStrikeSharp build)
+#if TASE_HAS_CLIENTCMD
+            TryPushRoleToClient(caller, title, role.ToString(), isElevated, ModuleVersion);
+#endif
+
+            // Tip: remind client to open the UI overlay
+            SayTo(caller, "[TASE] UI requested. If you don’t see it, install the Panorama addon and use ui_reload_panorama.");
+        }
+
+#if TASE_HAS_CLIENTCMD
+        private static void TryPushRoleToClient(CCSPlayerController p, string title, string role, bool elevated, string version)
+        {
+            void Exec(string cmd) { try { p.ExecuteClientCommand(cmd); } catch { /* ignore if not supported */ } }
+            // Quote-safe helper
+            string q(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
+
+            Exec($"tase_ui_version {q(version)}");
+            Exec($"tase_ui_role {q(role)}");
+            Exec($"tase_ui_title {q(title)}");
+            Exec($"tase_ui_elevated {(elevated ? 1 : 0)}");
+            Exec("tase_ui_open 1");
+        }
+#endif
+
+        private void CmdJail(CCSPlayerController? caller, CommandInfo info)
+        {
+            if (info.ArgCount < 3) { SayTo(caller, "Usage: tase_jail <steamid64> <seconds>"); return; }
+            if (!CanEditTitles(caller)) { SayTo(caller, "No permission."); return; }
+            if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Bad steamid64"); return; }
+            if (!int.TryParse(info.GetArg(2), out var secs)) secs = 60;
+            // TODO: integrate JailManager logic here
+            SayTo(caller, $"[TASE] (stub) Jailed {sid} for {secs}s.");
+        }
+
+        private void CmdUnjail(CCSPlayerController? caller, CommandInfo info)
+        {
+            if (info.ArgCount < 2) { SayTo(caller, "Usage: tase_unjail <steamid64>"); return; }
+            if (!CanEditTitles(caller)) { SayTo(caller, "No permission."); return; }
+            if (!ulong.TryParse(info.GetArg(1), out var sid)) { SayTo(caller, "Bad steamid64"); return; }
+            // TODO: integrate JailManager logic here
+            SayTo(caller, $"[TASE] (stub) Unjailed {sid}.");
+        }
+
         private void CmdTaseHelp(CCSPlayerController? caller, CommandInfo _)
             => SendLines(caller, GetHelpLines());
 
@@ -133,7 +154,7 @@ namespace Tase
             => SendLines(caller, new[]
             {
                 $"[TASE] {ModuleName} v{ModuleVersion} by {ModuleAuthor}",
-                $"[TASE] PhysMaxDistance={Config.PhysMaxDistance}, PhysSafeMode={Config.PhysSafeMode}"
+                $"[TASE] PhysGun.MaxDistance={Config.PhysGun.MaxDistance}, PhysGun.SafeMode={Config.PhysGun.SafeMode}, AirAccel={Config.Movement.AirAccelerate}, AirMove={Config.Movement.AirMove}, Emu128Tick={(Config.Movement.Emulate128Tick ? 1 : 0)}"
             });
 
         private string[] GetHelpLines()
@@ -165,7 +186,7 @@ namespace Tase
             foreach (var l in lines) { try { to.PrintToChat(l); } catch { } }
         }
 
-        // Simple chat/console helper used across commands
+        // Simple helper to send a chat or console message
         internal static void SayTo(CCSPlayerController? p, string text)
         {
             if (p == null) { Console.WriteLine(text); return; }
@@ -183,7 +204,7 @@ namespace Tase
             var cls = TitlesManager.EnsureClass("GoD");
             cls.MinRole = TaseRole.GoD;
             cls.Privileges = TasePrivilege.BuildBlocks | TasePrivilege.BustBlocks |
-                             TasePrivilege.UsePhysGun | TasePrivilege.JailPower  |
+                             TasePrivilege.UsePhysGun | TasePrivilege.JailPower |
                              TasePrivilege.Operator;
             TitlesManager.SaveClass(cls);
             TitlesManager.Set(sid, "GoD");
@@ -273,5 +294,10 @@ namespace Tase
         partial void Phys_OnTick();
         partial void Phys_OnPlayerDisconnected(CCSPlayerController p);
         partial void Phys_OnMapEnd(string map);
+
+        // -------------------- Movement hooks (implemented in Movement partial) --------------------
+        partial void Movement_OnTick();
+        partial void Movement_OnMapStart(string map);
+        partial void Movement_OnMapEnd(string map);
     }
 }
