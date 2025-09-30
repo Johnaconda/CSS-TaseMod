@@ -1,104 +1,110 @@
-// BanAppeal.cs
 using System;
 using System.Collections.Generic;
-using System.IO;
+using CounterStrikeSharp.API.Core;
 
-public static class BanAppeal
+namespace Tase
 {
-    private static Dictionary<ulong, AppealSession> _appeals = new();
-    private static string _appealsPath;
-
-    public class AppealSession
+    internal static class InputBridge
     {
-        public ulong SteamId;
-        public string Reason;
-        public DateTime BannedAt;
-        public bool Active;
-        public string ApologyText;
-    }
+        internal enum InputButton { Attack, Attack2, Reload, Speed, WheelUp, WheelDown }
 
-    public static void Init()
-    {
-        _appealsPath = Path.Combine(TasePlugin.DataPath, "appeals.json");
-        Load();
-    }
-
-    static void Load()
-    {
-        if (!File.Exists(_appealsPath)) return;
-        var json = File.ReadAllText(_appealsPath);
-        _appeals = JsonConvert.DeserializeObject<Dictionary<ulong, AppealSession>>(json);
-    }
-
-    static void Save() { File.WriteAllText(_appealsPath, JsonConvert.SerializeObject(_appeals, Formatting.Indented)); }
-
-    public static void OnBan(ulong steamId, string reason)
-    {
-        var s = new AppealSession { SteamId = steamId, Reason = reason, BannedAt = DateTime.UtcNow, Active = true };
-        _appeals[steamId] = s;
-        Save();
-        Logger.LogAction("ban", 0, steamId, $"reason={reason}");
-    }
-
-    // Called when a banned player connects and is forced to spectate+muted
-    public static void OfferAppealOptions(PlayerInvoker spectator)
-    {
-        spectator.ForceSpectateMuted();
-        spectator.Reply("You are banned. Use /appeal <message> to submit a written apology, or disconnect.");
-        // optionally show a small in-game UI form for apology text
-    }
-
-    public static void SubmitAppeal(PlayerInvoker spectator, string text)
-    {
-        if (!_appeals.TryGetValue(spectator.SteamId, out var s)) { spectator.Reply("No active ban record found."); return; }
-        s.ApologyText = text;
-        Save();
-        Logger.LogAction("appeal_submitted", spectator.SteamId, null, $"text={text.Truncate(256)}");
-        // notify online admins/GoD
-        foreach (var p in Server.GetOnlinePlayers())
+        private class PlayerInputState
         {
-            if (RolesManager.HasAtLeast(p.SteamId, TaseRole.Admin))
-            {
-                p.Reply($"[APPEAL] {spectator.Name} ({spectator.SteamId}) submitted an apology: {text}");
-                // give clickable options (panorama) to accept/reject
-            }
+            public bool AttackDown, AttackPressed, AttackReleased;
+            public bool Attack2Down, Attack2Pressed, Attack2Released;
+            public bool ReloadPressed;
+            public bool SpeedDown, SpeedPressed, SpeedReleased;
+            public bool WheelUpPressed, WheelDownPressed;
         }
-        spectator.Reply("Appeal submitted. Wait for admins to review. You remain in spectate muted.");
-    }
 
-    public static void AdminDecideAccept(ulong adminSteam, ulong targetSteam)
-    {
-        if (!_appeals.TryGetValue(targetSteam, out var s)) return;
-        // Perform unban and allow them back
-        Server.UnbanPlayer(targetSteam);
-        s.Active = false;
-        Save();
-        Logger.LogAction("appeal_accepted", adminSteam, targetSteam, "");
-        // message
-        Server.Broadcast($"{Server.GetPlayerNameBySteam(targetSteam)}'s ban has been revoked by admin.");
-    }
+        private static readonly Dictionary<ulong, PlayerInputState> _state = new();
 
-    public static void AdminDecideReject(ulong adminSteam, ulong targetSteam)
-    {
-        Logger.LogAction("appeal_rejected", adminSteam, targetSteam, "");
-        // optionally spawn the "pole" and rotten tomatoes
-        SpawnPoleAndTomatoes(targetSteam, adminSteam);
-    }
-
-    static void SpawnPoleAndTomatoes(ulong targetSteam, ulong actorSteam)
-    {
-        var pos = Server.GetDesignatedPunishLocation(); // e.g. center of map or configured spot
-        var copy = Server.SpawnEntity("ragdoll_copy", pos); // spawn a copy of the player's body
-        var pole = Server.SpawnEntity("wooden_pole", pos + new Vector3(0,0,-32f));
-        // attach copy to pole (parenting)
-        copy.SetParent(pole);
-        Logger.LogAction("spawn_pole", actorSteam, targetSteam, $"pole_entity={pole.Id}, copy={copy.Id}");
-        // spawn throwable 'tomato' items with limited ammo to all online players
-        foreach (var p in Server.GetOnlinePlayers())
+        internal static void Register(TasePlugin plugin)
         {
-            if (p.SteamId == actorSteam) continue;
-            p.GiveThrowable("item_tomato", Config.TomatoCount);
-            p.Reply("Tomato throw: hit the pole to express displeasure!");
+            // Primary/secondary/reload/speed (Shift)
+            plugin.AddCommand("+physgun_attack",  "PhysGun Primary Fire (internal)",   OnAttackPressed);
+            plugin.AddCommand("-physgun_attack",  "PhysGun Primary Fire (internal)",   OnAttackReleased);
+            plugin.AddCommand("+physgun_attack2", "PhysGun Secondary Fire (internal)", OnAttack2Pressed);
+            plugin.AddCommand("-physgun_attack2", "PhysGun Secondary Fire (internal)", OnAttack2Released);
+            plugin.AddCommand("+physgun_reload",  "PhysGun Reload (internal)",         OnReloadPressed);
+            plugin.AddCommand("-physgun_reload",  "PhysGun Reload (internal)",         OnReloadReleased);
+            plugin.AddCommand("+physgun_speed",   "PhysGun Speed Key (internal)",      OnSpeedPressed);
+            plugin.AddCommand("-physgun_speed",   "PhysGun Speed Key (internal)",      OnSpeedReleased);
+
+            // Mouse wheel distance
+            plugin.AddCommand("+physgun_wup",     "PhysGun Wheel Up (internal)",       OnWheelUp);
+            plugin.AddCommand("-physgun_wup",     "PhysGun Wheel Up (internal)",       (p, i) => { /* no-op */ });
+            plugin.AddCommand("+physgun_wdown",   "PhysGun Wheel Down (internal)",     OnWheelDown);
+            plugin.AddCommand("-physgun_wdown",   "PhysGun Wheel Down (internal)",     (p, i) => { /* no-op */ });
+        }
+
+        // ---- Handlers ----
+        private static void OnAttackPressed (CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.AttackDown=true;  s.AttackPressed=true; } }
+        private static void OnAttackReleased(CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.AttackDown=false; s.AttackReleased=true;} }
+        private static void OnAttack2Pressed(CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.Attack2Down=true; s.Attack2Pressed=true;} }
+        private static void OnAttack2Released(CCSPlayerController? p, CommandInfo _){ if (p!=null){ var s=Get(p); s.Attack2Down=false;s.Attack2Released=true;} }
+        private static void OnReloadPressed (CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.ReloadPressed=true; } }
+        private static void OnReloadReleased(CCSPlayerController? p, CommandInfo _) { /* no edge needed */ }
+        private static void OnSpeedPressed  (CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.SpeedDown=true;   s.SpeedPressed=true; } }
+        private static void OnSpeedReleased (CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.SpeedDown=false;  s.SpeedReleased=true;} }
+        private static void OnWheelUp       (CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.WheelUpPressed=true; } }
+        private static void OnWheelDown     (CCSPlayerController? p, CommandInfo _) { if (p!=null){ var s=Get(p); s.WheelDownPressed=true; } }
+
+        private static PlayerInputState Get(CCSPlayerController p)
+        {
+            var id = p.SteamID;
+            if (!_state.TryGetValue(id, out var st)) { st = new PlayerInputState(); _state[id]=st; }
+            return st;
+        }
+
+        // ---- Polling helpers (edge-triggered where appropriate) ----
+        internal static bool WasButtonPressed (CCSPlayerController p, InputButton b)
+        {
+            var s = Get(p);
+            bool v = b switch {
+                InputButton.Attack   => s.AttackPressed,
+                InputButton.Attack2  => s.Attack2Pressed,
+                InputButton.Reload   => s.ReloadPressed,
+                InputButton.Speed    => s.SpeedPressed,
+                InputButton.WheelUp  => s.WheelUpPressed,
+                InputButton.WheelDown=> s.WheelDownPressed,
+                _ => false
+            };
+            // reset edges
+            if (b == InputButton.Attack)   s.AttackPressed   = false;
+            if (b == InputButton.Attack2)  s.Attack2Pressed  = false;
+            if (b == InputButton.Reload)   s.ReloadPressed   = false;
+            if (b == InputButton.Speed)    s.SpeedPressed    = false;
+            if (b == InputButton.WheelUp)  s.WheelUpPressed  = false;
+            if (b == InputButton.WheelDown)s.WheelDownPressed= false;
+            return v;
+        }
+
+        internal static bool WasButtonReleased(CCSPlayerController p, InputButton b)
+        {
+            var s = Get(p);
+            bool v = b switch {
+                InputButton.Attack   => s.AttackReleased,
+                InputButton.Attack2  => s.Attack2Released,
+                InputButton.Speed    => s.SpeedReleased,
+                _ => false
+            };
+            if (b == InputButton.Attack)   s.AttackReleased   = false;
+            if (b == InputButton.Attack2)  s.Attack2Released  = false;
+            if (b == InputButton.Speed)    s.SpeedReleased    = false;
+            return v;
+        }
+
+        internal static bool IsButtonDown(CCSPlayerController p, InputButton b)
+        {
+            var s = Get(p);
+            return b switch
+            {
+                InputButton.Attack  => s.AttackDown,
+                InputButton.Attack2 => s.Attack2Down,
+                InputButton.Speed   => s.SpeedDown,
+                _ => false
+            };
         }
     }
 }
