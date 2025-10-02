@@ -1,5 +1,0 @@
-﻿<Project>
-  <PropertyGroup>
-    <DefineConstants>$(DefineConstants);TASE_HAS_CLIENTCMD</DefineConstants>
-  </PropertyGroup>
-</Project>

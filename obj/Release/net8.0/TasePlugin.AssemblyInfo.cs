@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TasePlugin")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7c8a19d05c736e9c4dec5d6c842e5708898915e2")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+74a8de1ea487f994db9aa509cc1c477d68bcdbc6")]
 [assembly: System.Reflection.AssemblyProductAttribute("TasePlugin")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TasePlugin")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

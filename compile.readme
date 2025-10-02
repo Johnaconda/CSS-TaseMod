@@ -1,0 +1,7 @@
+powershell - admin -
+
+--locate compile.ps1----
+cd c:\path\to\folder\  where compile.ps1 is located
+
+---Run---
+PowerShell -ExecutionPolicy Bypass -File .\compile.ps1
