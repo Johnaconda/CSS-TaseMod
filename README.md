@@ -1,36 +1,80 @@
-# TASE Plugin (CS2 / CounterStrikeSharp)
+# TASE — CS2 Admin + BlockMaker
+
+TASE is a CounterStrikeSharp administration and in-game construction toolkit.
+
+## Current development branch
+
+`feature/admin-blockmaker-v1` begins the resurrection of the original prototype.
+
+The old repository mixed placeholder APIs, duplicate command systems and root-level C# files while the project file compiled only `src/**/*.cs`. The new implementation deliberately uses `src/` as the canonical compiled source tree. Root-level legacy files remain temporarily as reference material and are not runtime authority.
+
+## Implemented in the current v0.7.0-dev slice
+
+- One canonical CounterStrikeSharp plugin entry point.
+- JSON-backed TASE roles: `None`, `BlockMaker`, `BlockBuster`, `Admin`, `GoD`.
+- Native `CenterHtmlMenu` admin shell.
+- Live player list backed by SteamID64.
+- Persistent per-admin multi-target selections.
+- Checkbox display for selected players.
+- Hold **Shift** while selecting a player to toggle that player into/out of the current multi-selection.
+- Select without Shift to replace the current selection with that player.
+- Disconnected-player pruning from selection sets.
+- Reusable selected-target action screen.
+- BlockMaker per-admin session state.
+- Initial BlockMaker shapes: Box, Slab, Pillar, Wedge, Inverted Wedge, Inner Corner, Outer Corner.
+- Initial size, RGB, grid snap and preview settings.
+
+CounterStrikeSharp's native menu provides paging for long player lists. A later optional Panorama frontend will map mouse-wheel scrolling directly while preserving the same server-authoritative selection state.
+
+## Commands
+
+- `!tase` / `css_tase` — open TASE.
+- `!bm` / `css_bm` — open BlockMaker.
+- `css_tase_select <steamid64>` — toggle a target in the current selection.
+- `css_tase_clear` — clear the current selection.
+
+## Architecture
+
+```
+src/
+  TasePlugin.cs
+  Admin/
+    AdminMenu.cs
+    TargetSelectionManager.cs
+  Auth/
+    RoleStore.cs
+  BlockMaker/
+    BlockMakerService.cs
+```
+
+All privileged actions must be verified server-side. UI state is never permission authority.
+
+Player targeting uses SteamID64 rather than player names or transient slots.
 
 ## Build
-- Requires .NET 7 (or match your server runtime) and CounterStrikeSharp server SDK.
-- Add Newtonsoft.Json package.
-- Compile TasePlugin.cs + all files into a single plugin DLL.
 
-Example (dotnet):
-dotnet new classlib -n TasePlugin
-# add files
-dotnet add package Newtonsoft.Json
-dotnet build -c Release
+The repository targets .NET 8 and references the CounterStrikeSharp API.
 
-## Install
-1. Copy plugin DLL to server `addons/plugins/` or your server's plugin folder.
-2. Create folder `<server>/tase` (plugin auto-creates on first run).
-3. Put `tase_config.json` and `roles.json` in `<server>/tase/config/` or adjust TasePlugin paths.
-4. Restart server or `plugin_load tase`.
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\compile.ps1
+```
 
-## Commands (console)
-- `tase_mod add <steam64> <GoD|Admin|BlockBuster|BlockMaker>`
-- `tase_mod del <steam64>`
-- `tase_mod list`
-- `tase_roles_reload`
+The existing compiler script stages `CounterStrikeSharp.API.dll` from the configured CS2 server and builds `Release`.
 
-## Chat commands (in-game)
-- `/tase` -> opens admin panel (role-aware)
-- `/bmsave` -> BlockMaker saves map
-- `/jail <player>`
-- `/unjail <player>`
-- `/grab` -> toggle physgun (GoD)
-- `/appeal <text>` -> banned spectating players submit apology
+## Next implementation slices
 
-## Notes
-- Map entity APIs and networked UI need wiring for Panorama if you want fancy right-click menus.
-- Replace placeholder calls (`Server.SpawnEntity`, `Physics.Raycast`, `Player.GiveWeapon`, etc.) with your server's exact methods.
+- Real moderation actions applied safely to one or many selected players.
+- Role/permission editor using the same multi-target selector.
+- BlockMaker world ray trace and ghost preview.
+- Server-authoritative block placement and stable block IDs.
+- Rotation, move, duplicate, delete, undo/redo and grouped selections.
+- Save/load per-map BlockMaker JSON.
+- Modular block model library for wedges/corners and predictable collision.
+- Shift multi-select for world blocks/entities.
+- Draw tools for walls, floors, ramps, stairs and arrays.
+- Optional Panorama frontend with literal mouse-wheel scrolling and richer visual controls.
+- Reconcile/delete the legacy root-level prototype once the new implementation reaches feature parity.
+
+## Validation rule
+
+A successful `dotnet build` must compile the actual `src/**/*.cs` runtime implementation. A small DLL produced from an empty source glob is not considered a valid build.
